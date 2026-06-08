@@ -7,12 +7,14 @@ struct DiskEntry {
     int blocks;
 };
 static struct DiskEntry disks[16];
+// opens disk with file name and bytes asked
 int openDisk(char *filename, int nBytes) {
     int fd;
     struct stat st;
     if (!filename || nBytes < 0) {
         return -1;
     }
+    // open an EXISTING disk file
     if (nBytes == 0) {
         fd = open(filename, O_RDWR);
         if (fd < 0 || fstat(fd, &st) < 0 || st.st_size < BLOCKSIZE) {
@@ -21,6 +23,7 @@ int openDisk(char *filename, int nBytes) {
             }
             return -1;
         }
+    // new file
     } else {
         nBytes = (nBytes / BLOCKSIZE) * BLOCKSIZE;
         if (nBytes < BLOCKSIZE) {
