@@ -2,6 +2,9 @@
 #define TINYFS_H
 #include "libDisk.h"
 #include "tinyFS_errno.h"
+#ifndef BLOCKSIZE
+#define BLOCKSIZE 256
+#endif
 #define DEFAULT_DISK_SIZE 10240
 #define DEFAULT_DISK_NAME "tinyFSDisk"
 typedef int fileDescriptor;
@@ -19,4 +22,6 @@ int tfs_readdir(void);
 int tfs_makeRO(char *name);
 int tfs_makeRW(char *name);
 int tfs_writeByte(fileDescriptor FD, int offset, unsigned int data);
+int tfs_readFileInfo(fileDescriptor FD);
+int tfs_checkConsistency(void);
 #endif
