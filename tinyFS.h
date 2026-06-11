@@ -23,5 +23,4 @@ int tfs_makeRO(char *name);
 int tfs_makeRW(char *name);
 int tfs_writeByte(fileDescriptor FD, int offset, unsigned int data);
 int tfs_readFileInfo(fileDescriptor FD);
-int tfs_checkConsistency(void);
 #endif

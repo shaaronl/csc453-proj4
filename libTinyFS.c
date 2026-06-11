@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-
 #define MAGIC 0x44
 #define SUPER 1
 #define INODE 2
@@ -21,15 +20,8 @@ static int mounted_disk = -1;
 static int block_count = 0;
 static struct OpenFile open_files[32];
 
-/* This implementation follows the assignment's suggested byte-2 linked-list
-   design. Superblock byte 2 is the first free block. Free/data blocks use byte
-   2 as their next pointer. Inodes use bytes 4-12 for name, 13-16 for size,
-   byte 17 for first data block, byte 18 for read-only, and bytes 24, 32, 40
-   for create, modify, and access times. */
-
 static int valid_name(char *name) {
     int len;
-
     if (!name) {
         return 0;
     }
@@ -68,10 +60,10 @@ static int check_fd(fileDescriptor FD) {
 static int find_inode(char *name, unsigned char *inode) {
     unsigned char block[BLOCKSIZE];
     char block_name[9];
-
     if (!valid_name(name)) {
         return TFS_ERR_BAD_NAME;
     }
+    // scan blocks for matching file name
     for (int i = 1; i < block_count; i++) {
         if (readBlock(mounted_disk, i, block) < 0) {
             return TFS_ERR_DISK;
@@ -94,10 +86,10 @@ static int alloc_block(int type) {
     unsigned char super[BLOCKSIZE];
     unsigned char block[BLOCKSIZE];
     int next;
-
     if (read_type(0, super, SUPER) != TFS_SUCCESS) {
         return TFS_ERR_BAD_FS;
     }
+    // pop first free block from free list
     next = super[2];
     if (next == 0) {
         return TFS_ERR_NO_SPACE;
@@ -121,13 +113,13 @@ static int alloc_block(int type) {
 static int free_block(int block_num) {
     unsigned char super[BLOCKSIZE];
     unsigned char block[BLOCKSIZE];
-
     if (block_num < 1 || block_num >= block_count) {
         return TFS_ERR_BAD_FS;
     }
     if (read_type(0, super, SUPER) != TFS_SUCCESS) {
         return TFS_ERR_BAD_FS;
     }
+    // push block back onto free list
     memset(block, 0, BLOCKSIZE);
     block[0] = FREE;
     block[1] = MAGIC;
@@ -143,10 +135,9 @@ static int free_chain(unsigned char *inode) {
     unsigned char block[BLOCKSIZE];
     int seen[BLOCKSIZE] = {0};
     int current = inode[17];
-
+    // free all data blocks for this file
     while (current != 0) {
         int next;
-
         if (current < 1 || current >= block_count || seen[current]) {
             return TFS_ERR_BAD_FS;
         }
@@ -169,7 +160,7 @@ static int free_chain(unsigned char *inode) {
 static int data_block_at(int first, int skip) {
     unsigned char block[BLOCKSIZE];
     int current = first;
-
+    // walk to the wanted data block
     for (int i = 0; i < skip; i++) {
         if (current < 1 || current >= block_count) {
             return TFS_ERR_BAD_FS;
@@ -187,7 +178,6 @@ int tfs_mkfs(char *filename, int nBytes) {
     int disk;
     int blocks;
     uint32_t disk_blocks;
-
     if (nBytes == 0) {
         nBytes = DEFAULT_DISK_SIZE;
     }
@@ -199,7 +189,7 @@ int tfs_mkfs(char *filename, int nBytes) {
     if (disk < 0) {
         return TFS_ERR_DISK;
     }
-
+    // block 0 starts the filesystem
     memset(block, 0, BLOCKSIZE);
     block[0] = SUPER;
     block[1] = MAGIC;
@@ -210,8 +200,8 @@ int tfs_mkfs(char *filename, int nBytes) {
         closeDisk(disk);
         return TFS_ERR_DISK;
     }
-
     for (int i = 1; i < blocks; i++) {
+        // link each free block to the next one
         memset(block, 0, BLOCKSIZE);
         block[0] = FREE;
         block[1] = MAGIC;
@@ -228,8 +218,6 @@ int tfs_mkfs(char *filename, int nBytes) {
 int tfs_mount(char *diskname) {
     unsigned char super[BLOCKSIZE];
     uint32_t disk_blocks;
-    int result;
-
     if (mounted_disk >= 0) {
         return TFS_ERR_MOUNTED;
     }
@@ -242,6 +230,7 @@ int tfs_mount(char *diskname) {
         mounted_disk = -1;
         return TFS_ERR_BAD_FS;
     }
+    // read block count from superblock
     memcpy(&disk_blocks, super + 4, sizeof(disk_blocks));
     block_count = (int)disk_blocks;
     if (block_count < 2 || block_count > 255) {
@@ -251,13 +240,6 @@ int tfs_mount(char *diskname) {
         return TFS_ERR_BAD_FS;
     }
     memset(open_files, 0, sizeof(open_files));
-    result = tfs_checkConsistency();
-    if (result != TFS_SUCCESS) {
-        closeDisk(mounted_disk);
-        mounted_disk = -1;
-        block_count = 0;
-        return result;
-    }
     return TFS_SUCCESS;
 }
 
@@ -277,7 +259,6 @@ fileDescriptor tfs_openFile(char *name) {
     time_t now;
     int inode_block;
     int fd = -1;
-
     if (mounted_disk < 0) {
         return TFS_ERR_NOT_MOUNTED;
     }
@@ -285,6 +266,7 @@ fileDescriptor tfs_openFile(char *name) {
         return TFS_ERR_BAD_NAME;
     }
     for (int i = 0; i < 32; i++) {
+        // find empty fd slot
         if (!open_files[i].used) {
             fd = i;
             break;
@@ -296,6 +278,7 @@ fileDescriptor tfs_openFile(char *name) {
 
     inode_block = find_inode(name, inode);
     if (inode_block == TFS_ERR_NOT_FOUND) {
+        // no inode yet, make one
         inode_block = alloc_block(INODE);
         if (inode_block < 0) {
             return inode_block;
@@ -316,13 +299,13 @@ fileDescriptor tfs_openFile(char *name) {
     } else if (inode_block < 0) {
         return inode_block;
     } else {
+        // existing file, touch access time
         now = time(NULL);
         memcpy(inode + 40, &now, sizeof(now));
         if (writeBlock(mounted_disk, inode_block, inode) < 0) {
             return TFS_ERR_DISK;
         }
     }
-
     open_files[fd].used = 1;
     open_files[fd].inode = inode_block;
     open_files[fd].fp = 0;
@@ -331,7 +314,6 @@ fileDescriptor tfs_openFile(char *name) {
 
 int tfs_closeFile(fileDescriptor FD) {
     int result = check_fd(FD);
-
     if (result != TFS_SUCCESS) {
         return result;
     }
@@ -349,10 +331,12 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
     int written = 0;
     int needed;
     int free_count = 0;
+    int old_count = 0;
     int current_free;
+    int current_old;
     int seen[BLOCKSIZE] = {0};
+    int seen_old[BLOCKSIZE] = {0};
     int result = check_fd(FD);
-
     if (result != TFS_SUCCESS) {
         return result;
     }
@@ -365,11 +349,7 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
     if (inode[18]) {
         return TFS_ERR_READ_ONLY;
     }
-
-    result = free_chain(inode);
-    if (result != TFS_SUCCESS) {
-        return result;
-    }
+    // make sure new file can fit first
     needed = (size + 251) / 252;
     if (read_type(0, block, SUPER) != TFS_SUCCESS) {
         return TFS_ERR_BAD_FS;
@@ -386,11 +366,26 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
         free_count++;
         current_free = block[2];
     }
-    if (free_count < needed) {
-        writeBlock(mounted_disk, open_files[FD].inode, inode);
+    current_old = inode[17];
+    while (current_old != 0) {
+        if (current_old < 1 || current_old >= block_count || seen_old[current_old]) {
+            return TFS_ERR_BAD_FS;
+        }
+        seen_old[current_old] = 1;
+        if (read_type(current_old, block, DATA) != TFS_SUCCESS) {
+            return TFS_ERR_BAD_FS;
+        }
+        old_count++;
+        current_old = block[2];
+    }
+    if (free_count + old_count < needed) {
         return TFS_ERR_NO_SPACE;
     }
-
+    // now safe to erase old data
+    result = free_chain(inode);
+    if (result != TFS_SUCCESS) {
+        return result;
+    }
     while (written < size) {
         int current = alloc_block(DATA);
         int chunk = size - written > 252 ? 252 : size - written;
@@ -413,7 +408,7 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
         }
         if (prev) {
             unsigned char prev_block[BLOCKSIZE];
-
+            // link prev data block to this one
             if (read_type(prev, prev_block, DATA) != TFS_SUCCESS) {
                 return TFS_ERR_BAD_FS;
             }
@@ -428,7 +423,7 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
         prev = current;
         written += chunk;
     }
-
+    // save new inode info
     inode[17] = (unsigned char)first;
     file_size = (uint32_t)size;
     memcpy(inode + 13, &file_size, sizeof(file_size));
@@ -446,7 +441,6 @@ int tfs_deleteFile(fileDescriptor FD) {
     unsigned char inode[BLOCKSIZE];
     int inode_block;
     int result = check_fd(FD);
-
     if (result != TFS_SUCCESS) {
         return result;
     }
@@ -457,6 +451,7 @@ int tfs_deleteFile(fileDescriptor FD) {
     if (inode[18]) {
         return TFS_ERR_READ_ONLY;
     }
+    // free data, then inode block
     result = free_chain(inode);
     if (result != TFS_SUCCESS) {
         return result;
@@ -480,7 +475,6 @@ int tfs_readByte(fileDescriptor FD, char *buffer) {
     time_t now;
     int current;
     int result = check_fd(FD);
-
     if (result != TFS_SUCCESS) {
         return result;
     }
@@ -494,6 +488,7 @@ int tfs_readByte(fileDescriptor FD, char *buffer) {
     if ((uint32_t)open_files[FD].fp >= size) {
         return TFS_ERR_EOF;
     }
+    // follow chain to current byte
     current = data_block_at(inode[17], open_files[FD].fp / 252);
     if (current < 0 || read_type(current, block, DATA) != TFS_SUCCESS) {
         return TFS_ERR_BAD_FS;
@@ -511,7 +506,6 @@ int tfs_seek(fileDescriptor FD, int offset) {
     uint32_t size;
     time_t now;
     int result = check_fd(FD);
-
     if (result != TFS_SUCCESS) {
         return result;
     }
@@ -532,7 +526,6 @@ int tfs_rename(fileDescriptor FD, char *newName) {
     unsigned char inode[BLOCKSIZE];
     time_t now;
     int result = check_fd(FD);
-
     if (result != TFS_SUCCESS) {
         return result;
     }
@@ -546,6 +539,7 @@ int tfs_rename(fileDescriptor FD, char *newName) {
     if (result >= 0 && result != open_files[FD].inode) {
         return TFS_ERR_EXISTS;
     }
+    // overwrite name in inode
     memset(inode + 4, 0, 9);
     strncpy((char *)inode + 4, newName, 8);
     now = time(NULL);
@@ -557,12 +551,12 @@ int tfs_readdir(void) {
     unsigned char inode[BLOCKSIZE];
     char name[9];
     uint32_t size;
-
     if (mounted_disk < 0) {
         return TFS_ERR_NOT_MOUNTED;
     }
     printf("Files:\n");
     for (int i = 1; i < block_count; i++) {
+        // print every inode found
         if (readBlock(mounted_disk, i, inode) < 0) {
             return TFS_ERR_DISK;
         }
@@ -580,7 +574,6 @@ int tfs_makeRO(char *name) {
     unsigned char inode[BLOCKSIZE];
     time_t now;
     int inode_block;
-
     if (mounted_disk < 0) {
         return TFS_ERR_NOT_MOUNTED;
     }
@@ -598,7 +591,6 @@ int tfs_makeRW(char *name) {
     unsigned char inode[BLOCKSIZE];
     time_t now;
     int inode_block;
-
     if (mounted_disk < 0) {
         return TFS_ERR_NOT_MOUNTED;
     }
@@ -619,7 +611,6 @@ int tfs_writeByte(fileDescriptor FD, int offset, unsigned int data) {
     time_t now;
     int current;
     int result = check_fd(FD);
-
     if (result != TFS_SUCCESS) {
         return result;
     }
@@ -633,6 +624,7 @@ int tfs_writeByte(fileDescriptor FD, int offset, unsigned int data) {
     if (offset < 0 || (uint32_t)offset >= size) {
         return TFS_ERR_BAD_OFFSET;
     }
+    // find block, change one byte
     current = data_block_at(inode[17], offset / 252);
     if (current < 0 || read_type(current, block, DATA) != TFS_SUCCESS) {
         return TFS_ERR_BAD_FS;
@@ -655,7 +647,6 @@ int tfs_readFileInfo(fileDescriptor FD) {
     time_t modified;
     time_t accessed;
     int result = check_fd(FD);
-
     if (result != TFS_SUCCESS) {
         return result;
     }
@@ -675,98 +666,5 @@ int tfs_readFileInfo(fileDescriptor FD) {
     printf("created: %s", ctime(&created));
     printf("modified: %s", ctime(&modified));
     printf("accessed: %s", ctime(&accessed));
-    return TFS_SUCCESS;
-}
-
-int tfs_checkConsistency(void) {
-    unsigned char super[BLOCKSIZE];
-    unsigned char block[BLOCKSIZE];
-    char names[BLOCKSIZE][9];
-    int owner[BLOCKSIZE] = {0};
-    int name_count = 0;
-    int current;
-
-    if (mounted_disk < 0) {
-        return TFS_ERR_NOT_MOUNTED;
-    }
-    if (read_type(0, super, SUPER) != TFS_SUCCESS) {
-        return TFS_ERR_BAD_FS;
-    }
-
-    current = super[2];
-    while (current != 0) {
-        if (current < 1 || current >= block_count || owner[current]) {
-            return TFS_ERR_BAD_FS;
-        }
-        if (read_type(current, block, FREE) != TFS_SUCCESS) {
-            return TFS_ERR_BAD_FS;
-        }
-        owner[current] = -1;
-        current = block[2];
-    }
-
-    for (int i = 1; i < block_count; i++) {
-        char name[9];
-        uint32_t size;
-        int blocks_needed;
-        int blocks_seen = 0;
-
-        if (readBlock(mounted_disk, i, block) < 0) {
-            return TFS_ERR_DISK;
-        }
-        if (block[1] != MAGIC || block[0] < INODE || block[0] > FREE) {
-            return TFS_ERR_BAD_FS;
-        }
-        if (block[0] != INODE) {
-            continue;
-        }
-        if (owner[i]) {
-            return TFS_ERR_BAD_FS;
-        }
-        owner[i] = i;
-        memcpy(name, block + 4, 8);
-        name[8] = '\0';
-        if (!valid_name(name)) {
-            return TFS_ERR_BAD_FS;
-        }
-        for (int j = 0; j < name_count; j++) {
-            if (strcmp(names[j], name) == 0) {
-                return TFS_ERR_BAD_FS;
-            }
-        }
-        strcpy(names[name_count++], name);
-
-        memcpy(&size, block + 13, sizeof(size));
-        blocks_needed = (int)((size + 251) / 252);
-        current = block[17];
-        if ((size == 0 && current != 0) ||
-            (size > 0 && (current < 1 || current >= block_count))) {
-            return TFS_ERR_BAD_FS;
-        }
-
-        while (current != 0) {
-            int next;
-
-            if (current < 1 || current >= block_count || owner[current]) {
-                return TFS_ERR_BAD_FS;
-            }
-            if (read_type(current, block, DATA) != TFS_SUCCESS) {
-                return TFS_ERR_BAD_FS;
-            }
-            owner[current] = i;
-            blocks_seen++;
-            next = block[2];
-            current = next;
-        }
-        if (blocks_seen != blocks_needed) {
-            return TFS_ERR_BAD_FS;
-        }
-    }
-
-    for (int i = 1; i < block_count; i++) {
-        if (owner[i] == 0) {
-            return TFS_ERR_BAD_FS;
-        }
-    }
     return TFS_SUCCESS;
 }

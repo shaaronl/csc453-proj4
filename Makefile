@@ -14,4 +14,7 @@ tinyFSDemo.o: tinyFSDemo.c tinyFS.h tinyFS_errno.h Makefile
 clean:
 	rm -f $(OBJS) tinyFSDemo tinyFSDisk
 
-.PHONY: all clean
+submission:
+	tar -czf TinyFS.tar.gz libDisk.c libDisk.h libTinyFS.c tinyFS.h tinyFS_errno.h tinyFSDemo.c Makefile README.md
+
+.PHONY: all clean submission
